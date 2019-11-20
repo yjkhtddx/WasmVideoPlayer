@@ -8,14 +8,16 @@ self.importScripts("common.js");
 self.importScripts("libffmpeg.js");
 
 function Decoder() {
-    this.logger         = new Logger("Decoder");
-    this.coreLogLevel   = 0;
-    this.wasmLoaded     = false;
-    this.tmpReqQue      = [];
-    this.cacheBuffer    = null;
-    this.decodeTimer    = null;
-    this.videoCallback  = null;
-    this.audioCallback  = null;
+    this.logger             = new Logger("Decoder");
+    this.coreLogLevel       = 0;
+    this.accurateSeek       = true;
+    this.wasmLoaded         = false;
+    this.tmpReqQue          = [];
+    this.cacheBuffer        = null;
+    this.decodeTimer        = null;
+    this.videoCallback      = null;
+    this.audioCallback      = null;
+    this.requestCallback    = null;
 }
 
 Decoder.prototype.initDecoder = function (fileSize, chunkSize) {
@@ -43,7 +45,7 @@ Decoder.prototype.uninitDecoder = function () {
 Decoder.prototype.openDecoder = function () {
     var paramCount = 7, paramSize = 4;
     var paramByteBuffer = Module._malloc(paramCount * paramSize);
-    var ret = Module._openDecoder(paramByteBuffer, paramCount, this.videoCallback, this.audioCallback);
+    var ret = Module._openDecoder(paramByteBuffer, paramCount, this.videoCallback, this.audioCallback, this.requestCallback);
     this.logger.logInfo("openDecoder return " + ret);
 
     if (ret == 0) {
@@ -127,12 +129,27 @@ Decoder.prototype.decode = function () {
         };
         self.postMessage(objData);
     }
+
+    while (ret == 9) {
+        //self.decoder.logger.logInfo("One old frame");
+        ret = Module._decodeOnePacket();
+    }
 };
 
 Decoder.prototype.sendData = function (data) {
     var typedArray = new Uint8Array(data);
     Module.HEAPU8.set(typedArray, this.cacheBuffer);
     Module._sendData(this.cacheBuffer, typedArray.length);
+};
+
+Decoder.prototype.seekTo = function (ms) {
+    var accurateSeek = this.accurateSeek ? 1 : 0;
+    var ret = Module._seekTo(ms, accurateSeek);
+    var objData = {
+        t: kSeekToRsp,
+        r: ret
+    };
+    self.postMessage(objData);
 };
 
 Decoder.prototype.processReq = function (req) {
@@ -158,6 +175,9 @@ Decoder.prototype.processReq = function (req) {
             break;
         case kFeedDataReq:
             this.sendData(req.d);
+            break;
+        case kSeekToReq:
+            this.seekTo(req.ms);
             break;
         default:
             this.logger.logError("Unsupport messsage " + req.t);
@@ -185,14 +205,23 @@ Decoder.prototype.onWasmLoaded = function () {
         self.postMessage(objData, [objData.d.buffer]);
     });
 
-    this.audioCallback = Module.addFunction(function (buff, size) {
+    this.audioCallback = Module.addFunction(function (buff, size, timestamp) {
         var outArray = Module.HEAPU8.subarray(buff, buff + size);
         var data = new Uint8Array(outArray);
         var objData = {
             t: kAudioFrame,
+            s: timestamp,
             d: data
         };
         self.postMessage(objData, [objData.d.buffer]);
+    });
+
+    this.requestCallback = Module.addFunction(function (offset) {
+        var objData = {
+            t: kRequestDataEvt,
+            o: offset
+        };
+        self.postMessage(objData);
     });
 
     while (this.tmpReqQue.length > 0) {
