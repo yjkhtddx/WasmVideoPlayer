@@ -175,3 +175,10 @@
     font-size: 14px;
     letter-spacing: 1px;
 }
+
+#input {
+    float: right;
+    margin-right: 10px;
+    margin-top: 3px;
+    font-size: 14px;
+}
